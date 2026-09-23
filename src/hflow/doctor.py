@@ -264,7 +264,23 @@ def diagnose(path: Path | str) -> DoctorReport:
             if schema_name in PASSTHROUGH_VIDEO_SCHEMA_NAMES
         }
 
-        metadata_records = {record.name: dict(record.metadata) for record in reader.iter_metadata()}
+        # MCAP allows repeated metadata names, but the canonical keyed view
+        # keeps only the last record for each. Count names while iterating,
+        # instead of collapsing them last-wins, so a duplicate that would
+        # silently flip task/success is reported rather than hidden (#596).
+        metadata_records: dict[str, dict[str, str]] = {}
+        metadata_name_counts: dict[str, int] = {}
+        for record in reader.iter_metadata():
+            metadata_name_counts[record.name] = metadata_name_counts.get(record.name, 0) + 1
+            metadata_records[record.name] = dict(record.metadata)
+        for name, count in sorted(metadata_name_counts.items()):
+            if count > 1:
+                collector.add(
+                    DiagnosticLevel.ERROR,
+                    "duplicate-metadata",
+                    f"{name}: {count} metadata records with the same name; "
+                    "the keyed view keeps only the last, silently dropping the others",
+                )
         provenance = metadata_records.get(METADATA_RECORD_PROVENANCE)
 
         def _positive_finite_seconds(raw_value: str) -> float | None:

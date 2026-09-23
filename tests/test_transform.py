@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from mcap.reader import make_reader
+from mcap.writer import Writer as StockWriter
 
 from hflow.format import (
     CANONICAL_VIDEO_SCHEMA_NAME,
@@ -13,8 +14,11 @@ from hflow.format import (
     METADATA_RECORD_PROVENANCE,
     GopPreset,
 )
+from hflow.ingest_ledger import IngestFailureKind, classify_ingest_failure
+from hflow.reader import open_reader
 from hflow.testing import SyntheticEpisodeSpec, synthesize_episode
 from hflow.transform import (
+    SourceNotConforming,
     TransformConfig,
     compute_pipeline_version,
     write_canonical_episode,
@@ -183,3 +187,57 @@ def test_chunks_never_mix_groups(canonical_episode: Path) -> None:
             )
             chunk_group_kinds.add(DEFAULT_CAMERA_GROUP if in_cameras else "state")
     assert chunk_group_kinds == {DEFAULT_CAMERA_GROUP, "state"}
+
+
+def _write_duplicate_episode_source(path: Path) -> None:
+    """A minimal source MCAP with two ``episode/v1`` records carrying different
+    task/success. The keyed metadata view keeps only the last (#596)."""
+    with path.open("wb") as stream:
+        writer = StockWriter(stream)
+        writer.start(profile="", library="test")
+        channel_id = writer.register_channel(
+            topic="/joint_states", message_encoding="json", schema_id=0
+        )
+        writer.add_message(channel_id, log_time=1, data=b"{}", publish_time=1)
+        writer.add_metadata(
+            name=METADATA_RECORD_EPISODE, data={"task": "first", "success": "false"}
+        )
+        writer.add_metadata(
+            name=METADATA_RECORD_EPISODE, data={"task": "second", "success": "true"}
+        )
+        writer.finish()
+
+
+def test_duplicate_metadata_refuses_as_source_unsupported(tmp_path: Path) -> None:
+    """Two ``episode/v1`` records must not publish a canonical whose
+    task/success is whichever record happened to be last. The transform refuses
+    with ``SourceNotConforming``, which ingest classifies as source-unsupported
+    (#596)."""
+    source = tmp_path / "duplicate_metadata.mcap"
+    _write_duplicate_episode_source(source)
+
+    with pytest.raises(SourceNotConforming, match="duplicate metadata") as raised:
+        write_canonical_episode(source, tmp_path / "out.mcap")
+    assert classify_ingest_failure(raised.value) == IngestFailureKind.SOURCE_UNSUPPORTED
+
+
+def test_single_metadata_record_per_name_is_not_refused(tmp_path: Path) -> None:
+    """One record per name is the normal case; the duplicate guard the
+    transform relies on must not fire on it (guards against over-rejection,
+    #596)."""
+    source = tmp_path / "single_metadata.mcap"
+    with source.open("wb") as stream:
+        writer = StockWriter(stream)
+        writer.start(profile="", library="test")
+        channel_id = writer.register_channel(
+            topic="/joint_states", message_encoding="json", schema_id=0
+        )
+        writer.add_message(channel_id, log_time=1, data=b"{}", publish_time=1)
+        writer.add_metadata(name=METADATA_RECORD_EPISODE, data={"task": "only", "success": "true"})
+        writer.finish()
+
+    reader = open_reader(source)
+    try:
+        assert reader.duplicate_metadata_names() == []
+    finally:
+        reader.close()

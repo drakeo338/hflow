@@ -597,6 +597,18 @@ def write_canonical_episode(
     # check on a pass that was already happening rather than adding one.
     reader = open_reader(source_path, validate_crcs=True)
     try:
+        # MCAP allows repeated metadata names, but the keyed metadata() view
+        # keeps only the last record for each. Publishing from that view would
+        # silently drop the earlier records -- a duplicate episode/v1 would flip
+        # the canonical task/success to whichever record happened to be last
+        # (#596). Refuse before any keyed metadata read relies on last-wins.
+        duplicate_metadata_names = reader.duplicate_metadata_names()
+        if duplicate_metadata_names:
+            described = ", ".join(repr(name) for name in duplicate_metadata_names)
+            raise SourceNotConforming(
+                f"source has duplicate metadata record(s) {described}; "
+                "the keyed view keeps only the last and would silently drop the rest"
+            )
         # First-party direct-H.264 imports commit quality/GOP at import time.
         # Never silently accept incompatible transform requests or introduce
         # another lossy generation. Ordinary recorded H.264 remains pass-through.

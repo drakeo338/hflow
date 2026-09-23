@@ -117,6 +117,14 @@ class EpisodeReader(Protocol):
         """All MCAP Metadata records, keyed by record name (last record wins)."""
         ...
 
+    def duplicate_metadata_names(self) -> list[str]:
+        """Metadata record names that appear more than once, sorted.
+
+        MCAP allows repeated names; the keyed :meth:`metadata` view collapses
+        them last-wins. This surfaces the collision so a caller can refuse it
+        rather than silently drop the earlier records."""
+        ...
+
     def time_bounds(self) -> EpisodeTimeBounds | None:
         """The log-time span of every message in the file, or ``None`` when
         the file records no statistics or holds no messages."""
@@ -229,6 +237,12 @@ class PythonMcapEpisodeReader:
                 )
             records[record.name] = dict(record.metadata)
         return records
+
+    def duplicate_metadata_names(self) -> list[str]:
+        counts: dict[str, int] = {}
+        for record in self._reader.iter_metadata():
+            counts[record.name] = counts.get(record.name, 0) + 1
+        return sorted(name for name, count in counts.items() if count > 1)
 
     def attachments(self) -> Iterator[Attachment]:
         return self._reader.iter_attachments()

@@ -243,6 +243,7 @@ automation. An `error` breaks the canonical convention (or the MCAP spec); a
 | `missing-provenance` | error | The `provenance/v1` metadata record is absent. |
 | `provenance-missing-key` | error | `provenance/v1` lacks `schema_version` or `pipeline_version`. |
 | `missing-episode-record` | warning | The optional `episode/v1` semantics record is absent. |
+| `duplicate-metadata` | error | A metadata record name appears more than once. The keyed view keeps only the last, silently dropping the others (e.g. flipping `episode/v1` task/success). |
 | `multiple-channels-for-topic` | error | One topic names more than one channel. Topic-keyed reads cannot represent that. |
 | `topic-time-order` | error | A channel's `log_time` decreases between messages. |
 | `video-format` | error | A supported video message does not declare `format="h264"`. |

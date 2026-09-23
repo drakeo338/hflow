@@ -178,6 +178,55 @@ def test_unique_topics_do_not_report_multiple_channels(tmp_path: Path) -> None:
     assert not any(finding.code == "multiple-channels-for-topic" for finding in report.findings)
 
 
+def test_duplicate_metadata_records_are_an_error(tmp_path: Path) -> None:
+    """Two metadata records with the same name collapse last-wins in the keyed
+    view, which can silently flip episode task/success. Doctor must report the
+    duplicate instead of building ``{name: last record}`` (#596)."""
+    path = tmp_path / "duplicate_metadata.mcap"
+    with path.open("wb") as stream:
+        writer = StockWriter(stream)
+        writer.start(profile="", library="test")
+        channel_id = writer.register_channel(
+            topic="/joint_states", message_encoding="json", schema_id=0
+        )
+        writer.add_message(channel_id, log_time=1, data=b"{}", publish_time=1)
+        writer.add_metadata(
+            name="provenance/v1", data={"schema_version": "1", "pipeline_version": "1"}
+        )
+        writer.add_metadata(name="episode/v1", data={"task": "first", "success": "false"})
+        writer.add_metadata(name="episode/v1", data={"task": "second", "success": "true"})
+        writer.finish()
+
+    report = diagnose(path)
+
+    findings = [finding for finding in report.findings if finding.code == "duplicate-metadata"]
+    assert len(findings) == 1
+    assert findings[0].level is DiagnosticLevel.ERROR
+    assert "episode/v1" in findings[0].message
+    assert not report.conforming
+
+
+def test_single_metadata_record_per_name_is_not_flagged(tmp_path: Path) -> None:
+    """One record per name is the normal case; the duplicate finding must not
+    fire on it (guards against over-rejection, #596)."""
+    path = tmp_path / "single_metadata.mcap"
+    with path.open("wb") as stream:
+        writer = StockWriter(stream)
+        writer.start(profile="", library="test")
+        channel_id = writer.register_channel(
+            topic="/joint_states", message_encoding="json", schema_id=0
+        )
+        writer.add_message(channel_id, log_time=1, data=b"{}", publish_time=1)
+        writer.add_metadata(
+            name="provenance/v1", data={"schema_version": "1", "pipeline_version": "1"}
+        )
+        writer.add_metadata(name="episode/v1", data={"task": "only", "success": "true"})
+        writer.finish()
+
+    report = diagnose(path)
+    assert not any(finding.code == "duplicate-metadata" for finding in report.findings)
+
+
 def test_nonconforming_video_is_reported(tmp_path: Path) -> None:
     path = tmp_path / "bad_video.mcap"
     _write_video_message_mcap(path, b"\x00\x00\x00\x01\x41not-aud-delimited")
